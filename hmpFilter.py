@@ -18,9 +18,14 @@ NEWLINE = '\n'
 DELIM = '\t'
 HEADERLINE = 'MarkerID' + DELIM \
     + 'Alleles' + DELIM \
+    + 'countTotal' + DELIM \
     + 'countMajorAllele' + DELIM \
+    + 'freqMajorAllele' + DELIM \
     + 'countMinorAllele' + DELIM \
-    + 'countMissing'
+    + 'freqMinorAllele' + DELIM \
+    + 'countMissing' + DELIM \
+    + 'freqMissing'
+
 
 
 """
@@ -38,6 +43,10 @@ parser.add_option("-i", "--inHMP", dest="inHMP",
                   metavar="<FILENAME>")
 parser.add_option("-o", "--outFile", dest="outFile", help="Output Summary file",
                   metavar="<string>")
+parser.add_option("-r", "--genomeFile", dest="genomeFile", help="genome fasta file",
+                  metavar="<string>")
+parser.add_option("-l", "--length", dest="length", help="Flanking sequence length",
+                  metavar="<int>")
 parser.add_option("-q", "--quiet", action="store_false", dest="verbose", default=True,
                   help="don't print status messages to stdout")
 
@@ -102,12 +111,14 @@ def readColumns(row):
 
 """__main__"""
 
-required = "inHMP outFile".split()
+required = "inHMP outFile genomeFile length".split()
 for req in required:
     if options.__dict__[req] is None:
         parser.error("Required option %s missing" % req)
 inHMP = options.inHMP
 outFile = options.outFile
+genomeFile = options.genomeFile
+length = options.length
 lineNo = 0
 
 startTime = int(time.time())
@@ -129,7 +140,7 @@ def initialize_baseCount():
     return baseCount
 
 
-def sortDictByValue(inDict, ascend):
+def sortDictByValue(inDict, discend):
     """
     Sort the dictionary based on its values
     :param inDict:
@@ -137,7 +148,7 @@ def sortDictByValue(inDict, ascend):
     :return:
     """
     sortedDict = defaultdict(dict)
-    if ascend:
+    if discend:
         for w in sorted(inDict, key=inDict.get, reverse=True):
             sortedDict[w] = inDict[w]
     else:
@@ -158,6 +169,39 @@ def getBaseCount(genotypeCalls):
             countBase[base] += 1
     return countBase
 
+def picklines(thefile, whatlines):
+  return [x for i, x in enumerate(thefile) if i in whatlines]
+
+
+def getSeq(genome, chromosome, position, length, side):
+    sequence = ''
+    position = int(position)
+    if side == 'left':
+        start = position - 101
+        end = position - 1
+    if side == 'right':
+        start = position
+        end = position + 100
+    if start < 0:
+        return sequence
+    if end > len(genome[chromosome]):
+        return sequence
+    return genome[chromosome][start:end].seq
+
+
+def getBases(sequence):
+    basecounts = defaultdict(dict)
+    basecounts['A'] = 0
+    basecounts['T'] = 0
+    basecounts['G'] = 0
+    basecounts['C'] = 0
+    basecounts['N'] = 0
+    seqList = list(sequence)
+    for base in seqList:
+        basecounts[base.upper()] += 1
+    return basecounts
+
+genome = Fasta(genomeFile)
 
 with open(inHMP) as iHandle:
     outFileHandle = open(outFile, 'w')
@@ -172,6 +216,8 @@ with open(inHMP) as iHandle:
         else:
             genotypeCalls = readColumns(rowEntries)
             markerId = rowEntries[0]
+            chromosome = rowEntries[2]
+            position = rowEntries[3]
             majorAllele = ''
             minorAllele = ''
             thirdAllele = ''
@@ -205,11 +251,45 @@ with open(inHMP) as iHandle:
                 tmpMinor = max(majorAllele, minorAllele)
                 minorAllele = tmpMinor
                 majorAllele = tmpMajor
+
+            countMajorAllele = countBase.get(majorAllele)
+            countMinorAllele = countBase.get(minorAllele)
+            countMissing = countBase.get('N')
+            countTotal = countMajorAllele + countMinorAllele + countMissing
+            freqMajorAllele = round((countMajorAllele / countTotal),4)
+            freqMinorAllele = round((countMinorAllele / countTotal),4)
+            freqMissing = round((countMissing / countTotal),4)
+
+            leftSeq = getSeq(genome, chromosome, position, length, 'left')
+            rightSeq = getSeq(genome, chromosome, position, length, 'right')
+
+            leftSeqCounts = getBases(leftSeq)
+            gcLeft = int((leftSeqCounts.get('G') + leftSeqCounts.get('C')) * 100/len(leftSeq))
+            ambiLeft = len(leftSeq) - (
+                        leftSeqCounts.get('G') + leftSeqCounts.get('C') + leftSeqCounts.get('T') + leftSeqCounts.get(
+                    'A'))
+
+            rightSeqCounts = getBases(rightSeq)
+            gcRight = int((rightSeqCounts.get('G') + rightSeqCounts.get('C')) * 100 / len(rightSeq))
+            ambiRight = len(leftSeq) - (
+                        rightSeqCounts.get('G') + rightSeqCounts.get('C') + rightSeqCounts.get('T') + rightSeqCounts.get(
+                    'A'))
+
             outFileHandle.write(markerId + DELIM \
                                 + majorAllele + "/" + minorAllele + DELIM \
-                                + str(countBase.get(majorAllele)) + DELIM \
-                                + str(countBase.get(minorAllele)) + DELIM \
-                                + str(countBase.get('N')))
+                                + str(countTotal) + DELIM \
+                                + str(countMajorAllele) + DELIM \
+                                + str(freqMajorAllele) + DELIM \
+                                + str(countMinorAllele) + DELIM \
+                                + str(freqMinorAllele) + DELIM \
+                                + str(countMissing) + DELIM \
+                                + str(freqMissing) + DELIM \
+                                + leftSeq + DELIM \
+                                + rightSeq + DELIM \
+                                + str(gcLeft) + DELIM \
+                                + str(ambiLeft) + DELIM \
+                                + str(gcRight) + DELIM \
+                                + str(ambiRight))
             outFileHandle.write(NEWLINE)
     print(lineNo)
 outFileHandle.close()
